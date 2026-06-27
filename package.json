@@ -1,0 +1,26 @@
+{
+  "name": "orangehrm-automation",
+  "version": "1.0.0",
+  "description": "OrangeHRM Playwright Test Automation - POM + API + Data Driven",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report",
+    "test:login": "playwright test tests/01-login.spec.ts",
+    "test:dashboard": "playwright test tests/02-dashboard.spec.ts",
+    "test:pim": "playwright test tests/03-pim.spec.ts",
+    "test:leave": "playwright test tests/04-leave.spec.ts",
+    "test:admin": "playwright test tests/05-admin.spec.ts",
+    "test:myinfo": "playwright test tests/06-myinfo.spec.ts",
+    "test:recruitment": "playwright test tests/07-recruitment.spec.ts",
+    "test:directory": "playwright test tests/08-directory.spec.ts",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
