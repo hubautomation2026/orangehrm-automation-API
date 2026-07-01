@@ -111,10 +111,24 @@ export const test = base.extend<PageFixtures>({
     await use(new DirectoryPage(authenticatedPage));
   },
 
-  // CHANGE 2: api fixture now provides the upgraded, fully-typed OrangeHRMApi
-  api: async ({ request }, use) => {
+  // CHANGE 2: api fixture now provides the upgraded, fully-typed OrangeHRMApi.
+  //
+  // CHANGE 4 (auth fix): OrangeHRMApi no longer reimplements login over raw
+  // HTTP (CSRF parsing + cookie jar + XSRF header guesswork was fragile and
+  // kept hitting Playwright internals — see comments in OrangeHRMApi.ts).
+  //
+  // Instead: do a REAL browser login first (the same flow TC01-TC03 already
+  // prove works), then hand the browser's authenticated cookies to the API
+  // client via loadCookiesFrom(context). The browser already solved CSRF,
+  // redirects, and session cookies correctly — we just reuse its result.
+  api: async ({ page, request }, use) => {
+    const loginPage = new LoginPage(page);
+    await loginPage.goto();
+    await loginPage.login(credentials.valid.username, credentials.valid.password);
+    await loginPage.assertLoggedIn();
+
     const api = new OrangeHRMApi(request);
-    await api.login();
+    await api.loadCookiesFrom(page.context());
     await use(api);
   },
 });

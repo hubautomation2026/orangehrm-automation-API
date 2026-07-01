@@ -15,9 +15,11 @@
     "test:myinfo": "playwright test tests/06-myinfo.spec.ts",
     "test:recruitment": "playwright test tests/07-recruitment.spec.ts",
     "test:directory": "playwright test tests/08-directory.spec.ts",
+    "test:apiauth": "playwright test tests/auth-flow.spec.ts",
     "install:browsers": "playwright install chromium"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.5.0",
     "@playwright/test": "^1.60.0",
     "@types/node": "^20.0.0",
     "ts-node": "^10.9.2",

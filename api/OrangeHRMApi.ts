@@ -1,31 +1,31 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // api/OrangeHRMApi.ts
 //
-// WHAT CHANGED vs original:
+// FINAL FIX — approach change, not another header tweak.
 //
-//  1. `parseJson()` was `Promise<any>` → now `parseResponse<T>()` is generic.
-//     Every caller tells TypeScript the expected shape at call time.
+// Every previous attempt tried to reimplement OrangeHRM's login (CSRF token,
+// Set-Cookie parsing, XSRF header) using raw HTTP calls via APIRequestContext.
+// Each attempt hit a different Playwright internal quirk (redirect-following,
+// maxRedirects mapping, cookie-header injection rules) because we were
+// fighting the framework instead of using the part of it that already works.
 //
-//  2. `defaultHeaders()` returned a plain object → now typed as
-//     `Record<string, string>` so TypeScript catches wrong header values.
+// We KNOW the real browser login works — TC01, TC02, TC03 pass every run
+// using LoginPage.login() through an actual Chromium page. That flow handles
+// CSRF tokens, redirects, and session cookies correctly because it's a real
+// browser doing what browsers do.
 //
-//  3. `createEmployee()` took three loose string args → now takes a typed
-//     `CreateEmployeePayload` object. Wrong field names are caught at compile time.
+// THE FIX: stop reimplementing login over raw HTTP. Instead, accept the
+// cookies from an already-authenticated BrowserContext (captured via
+// `context.storageState()` after a real UI login) and reuse them for API
+// calls. No CSRF parsing, no manual cookie-jar logic, no guessing at
+// Laravel's XSRF header requirements — the browser already solved all of
+// that correctly.
 //
-//  4. `createSystemUser()` had an inline anonymous type → now uses the
-//     imported `CreateUserPayload` interface for consistency and reuse.
-//
-//  5. `assertStatus()` was async for no reason → now synchronous.
-//     Async functions that don't await anything waste a Promise allocation
-//     and mislead callers into thinking they need to await them.
-//
-//  6. Added `readonly` to `BASE_URL` constant to match `as const` discipline.
-//
-//  7. Return types on every public method are now explicit — the original
-//     relied on inference, which breaks when the implementation changes.
+// login() is replaced with loadCookiesFrom(context), called from the fixture
+// AFTER a real UI login has happened.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { APIRequestContext, APIResponse, expect } from '@playwright/test';
+import { APIRequestContext, APIResponse, BrowserContext, expect } from '@playwright/test';
 import type {
   OrangeHRMListResponse,
   OrangeHRMSingleResponse,
@@ -37,66 +37,64 @@ import type {
   CreateUserPayload,
 } from '../types/api.types';
 
-// CHANGE 6: `as const` makes BASE_URL a literal type 'https://...' not just string.
-// If this value is ever changed elsewhere by mistake, TypeScript flags it.
 const BASE_URL = 'https://opensource-demo.orangehrmlive.com/web/index.php/api/v2' as const;
 
 export class OrangeHRMApi {
-  // CHANGE: `readonly` prevents accidental reassignment of the request context.
   private readonly request: APIRequestContext;
   private cookies: string = '';
+  private xsrfToken: string = '';
 
   constructor(request: APIRequestContext) {
     this.request = request;
   }
 
-  // ─── Authentication ─────────────────────────────────────────────────────────
+  // ─── Authentication ──────────────────────────────────────────────────────────
+  //
+  // Pulls cookies from an already-authenticated BrowserContext (real UI login
+  // already happened via LoginPage.login() + assertLoggedIn()). This is the
+  // exact set of cookies a real browser sends, including the authenticated
+  // session and any XSRF-TOKEN cookie Laravel issued — no manual parsing needed.
+  //
+  // Usage (from a fixture):
+  //   const api = new OrangeHRMApi(request);
+  //   await api.loadCookiesFrom(context);   // context is already logged in
 
-  async login(username = 'Admin', password = 'admin123'): Promise<void> {
-    const loginPage = await this.request.get(
-      'https://opensource-demo.orangehrmlive.com/web/index.php/auth/login'
+  async loadCookiesFrom(context: BrowserContext): Promise<void> {
+    const cookies = await context.cookies();
+
+    this.cookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+    // Laravel SPA endpoints require X-XSRF-TOKEN on top of the cookie itself.
+    // The cookie value is URL-encoded; the header must be decoded.
+    const xsrfCookie = cookies.find(
+      c => c.name === 'XSRF-TOKEN' || c.name.toLowerCase() === 'xsrf-token'
     );
-    const setCookieHeader = loginPage.headers()['set-cookie'] ?? '';
-    const sessionCookie = setCookieHeader.split(';')[0];
-
-    const loginResp = await this.request.post(
-      'https://opensource-demo.orangehrmlive.com/web/index.php/auth/validate',
-      {
-        form: { username, password, _token: '' },
-        headers: { Cookie: sessionCookie },
-      }
-    );
-
-    const responseCookies = loginResp.headers()['set-cookie'] ?? sessionCookie;
-    this.cookies = responseCookies.split(';')[0];
+    this.xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.value) : '';
   }
 
-  // CHANGE 2: Return type is explicit `Record<string, string>` — not inferred.
-  // This is important: if you add a header with a non-string value later,
-  // TypeScript will flag it immediately rather than silently breaking requests.
+  // ─── Request headers ─────────────────────────────────────────────────────────
+
   private defaultHeaders(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Cookie: this.cookies,
+      'X-Requested-With': 'XMLHttpRequest',
     };
+
+    if (this.cookies) headers['Cookie'] = this.cookies;
+    if (this.xsrfToken) headers['X-XSRF-TOKEN'] = this.xsrfToken;
+
+    return headers;
   }
 
-  // ─── Generic response parser ─────────────────────────────────────────────────
-  // CHANGE 1: This replaces `parseJson(resp): Promise<any>`.
-  // The generic <T> makes the return type match whatever you pass as T.
-  // parseResponse<OrangeHRMListResponse<Employee>>(resp) → body typed as
-  // { data: Employee[], meta: { total: number, ... } }
-  // The caller decides the type — this method stays generic.
+  // ─── Generic response parser ──────────────────────────────────────────────────
 
   async parseResponse<T>(response: APIResponse): Promise<T> {
     return response.json() as T;
   }
 
-  // ─── Employees ───────────────────────────────────────────────────────────────
+  // ─── Employees ────────────────────────────────────────────────────────────────
 
-  async getEmployees(
-    params: Record<string, string> = {}
-  ): Promise<APIResponse> {
+  async getEmployees(params: Record<string, string> = {}): Promise<APIResponse> {
     const allParams = { limit: '50', offset: '0', ...params };
     const query = new URLSearchParams(allParams).toString();
     return this.request.get(`${BASE_URL}/pim/employees?${query}`, {
@@ -110,11 +108,6 @@ export class OrangeHRMApi {
     });
   }
 
-  // CHANGE 3: Was `createEmployee(firstName: string, lastName: string, employeeId: string)`.
-  // Three loose strings — easy to pass them in the wrong order, no compiler warning.
-  // Now uses CreateEmployeePayload: a named object where field names are explicit.
-  // Wrong field names → TypeScript error at compile time, not a runtime bug.
-
   async createEmployee(payload: CreateEmployeePayload): Promise<APIResponse> {
     return this.request.post(`${BASE_URL}/pim/employees`, {
       headers: this.defaultHeaders(),
@@ -122,7 +115,7 @@ export class OrangeHRMApi {
     });
   }
 
-  // ─── Leave ───────────────────────────────────────────────────────────────────
+  // ─── Leave ────────────────────────────────────────────────────────────────────
 
   async getLeaveTypes(): Promise<APIResponse> {
     return this.request.get(`${BASE_URL}/leave/leave-types?limit=50&offset=0`, {
@@ -136,18 +129,13 @@ export class OrangeHRMApi {
     });
   }
 
-  // ─── Admin / Users ───────────────────────────────────────────────────────────
+  // ─── Admin / Users ────────────────────────────────────────────────────────────
 
   async getSystemUsers(): Promise<APIResponse> {
     return this.request.get(`${BASE_URL}/admin/users?limit=50&offset=0`, {
       headers: this.defaultHeaders(),
     });
   }
-
-  // CHANGE 4: Was an inline anonymous type `{ userRoleId: number; empNumber: number; ... }`.
-  // Now uses the imported CreateUserPayload — same type shared between
-  // the API client, test data, and test assertions. Change the type once, it
-  // updates everywhere. With inline types you'd update each call site separately.
 
   async createSystemUser(payload: CreateUserPayload): Promise<APIResponse> {
     return this.request.post(`${BASE_URL}/admin/users`, {
@@ -162,7 +150,7 @@ export class OrangeHRMApi {
     });
   }
 
-  // ─── Job Titles ──────────────────────────────────────────────────────────────
+  // ─── Job Titles ───────────────────────────────────────────────────────────────
 
   async getJobTitles(): Promise<APIResponse> {
     return this.request.get(`${BASE_URL}/admin/job-titles?limit=50&offset=0`, {
@@ -177,19 +165,12 @@ export class OrangeHRMApi {
     });
   }
 
-  // ─── Response helpers ────────────────────────────────────────────────────────
-
-  // CHANGE 5: Was `async assertStatus(...)` — there is no `await` inside,
-  // so `async` was misleading. Callers were forced to `await` a function
-  // that never actually does anything asynchronous.
-  // Rule: never mark a function `async` unless it contains `await`.
+  // ─── Response helpers ─────────────────────────────────────────────────────────
 
   assertStatus(response: APIResponse, expectedStatus: number): void {
     expect(response.status()).toBe(expectedStatus);
   }
 
-  // Kept for backward compat but now typed properly.
-  // In new test code, prefer parseResponse<T>() for type-safe access.
   async parseJson(response: APIResponse): Promise<unknown> {
     return response.json();
   }

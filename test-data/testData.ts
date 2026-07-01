@@ -1,3 +1,5 @@
+import { faker } from '@faker-js/faker';
+faker.seed(12345);
 // ─────────────────────────────────────────────────────────────────────────────
 // test-data/testData.ts
 //
@@ -51,17 +53,17 @@ export const employeeData: ReadonlyArray<{
   maritalStatus: string;
 }> = [
   {
-    firstName:     'John',
+    firstName:     'jones55',
     middleName:    'A',
-    lastName:      'Doe',
+    lastName:      'Doe44',
     employeeId:    'EMP001',
     gender:        'Male',
     maritalStatus: 'Single',
   },
   {
-    firstName:     'Jane',
+    firstName:     'kill2',
     middleName:    'B',
-    lastName:      'Smith',
+    lastName:      'Smithkk',
     employeeId:    'EMP002',
     gender:        'Female',
     maritalStatus: 'Married',
@@ -125,6 +127,6 @@ export const workShiftData = [
 ] as const;
 
 export const searchEmployeeData = [
-  { employeeName: 'Paul', employeeId: '',     status: 'Active' },
+  { employeeName: 'mand', employeeId: '',     status: 'Active' },
   { employeeName: '',     employeeId: '0002', status: '' },
 ] as const;
